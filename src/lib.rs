@@ -336,6 +336,14 @@ pub mod window {
         let d = native_display().lock().unwrap();
         d.dropped_files.paths.get(index).cloned()
     }
+    pub fn dropped_file_is_dir(index: usize) -> bool {
+        let d = native_display().lock().unwrap();
+        if let Some(path) = d.dropped_files.paths.get(index) {
+            path.is_dir()
+        } else {
+            false
+        }
+    }
 
     /// Show/hide onscreen keyboard.
     /// Only works on Android right now.

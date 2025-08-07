@@ -18,7 +18,7 @@ impl EventHandler for Stage {
         println!("  High DPI: {}", metrics.high_dpi);
 
         let (width, height) = window::screen_size();
-        println!("Screen Size (legacy): {}x{}", width, height);
+        println!("Screen Size (legacy): {width}x{height}");
 
         println!("DPI Scale (legacy): {}", window::dpi_scale());
         println!("High DPI (legacy): {}", window::high_dpi());

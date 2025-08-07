@@ -742,12 +742,10 @@ unsafe fn view_base_decl(decl: &mut ClassDecl) {
                 let path_str = crate::native::apple::apple_util::nsstring_to_string(path_nsstring);
                 let path = std::path::PathBuf::from(path_str);
 
-                // Try to read file contents
-                if let Ok(bytes) = std::fs::read(&path) {
-                    let mut d = crate::native_display().lock().unwrap();
-                    d.dropped_files.paths.push(path);
-                    d.dropped_files.bytes.push(bytes);
-                }
+                // Add path for both files and directories, no automatic file reading
+                let mut d = crate::native_display().lock().unwrap();
+                d.dropped_files.paths.push(path);
+                d.dropped_files.bytes.push(Vec::new());
             }
 
             // Trigger the dropped files event

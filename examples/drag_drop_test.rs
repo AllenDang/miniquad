@@ -27,12 +27,13 @@ impl EventHandler for Stage {
         for i in 0..count {
             if let Some(path) = window::dropped_file_path(i) {
                 let path_str = path.to_string_lossy().to_string();
-                println!("Dropped file {i}: {path_str}");
-                self.dropped_files.push(path_str);
-
-                if let Some(bytes) = window::dropped_file_bytes(i) {
-                    println!("  Size: {} bytes", bytes.len());
+                let is_dir = window::dropped_file_is_dir(i);
+                if is_dir {
+                    println!("Dropped folder {i}: {path_str}");
+                } else {
+                    println!("Dropped file {i}: {path_str}");
                 }
+                self.dropped_files.push(path_str);
             }
         }
 

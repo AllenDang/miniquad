@@ -105,7 +105,7 @@ impl Stage {
 
         let offscreen_bind = Bindings {
             vertex_buffers: vec![vertex_buffer],
-            index_buffer: index_buffer,
+            index_buffer,
             images: vec![],
         };
 

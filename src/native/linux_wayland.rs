@@ -1276,10 +1276,9 @@ where
                         d.dropped_files = Default::default();
                         for filename in filenames.lines() {
                             let path = std::path::PathBuf::from(filename);
-                            if let Ok(bytes) = std::fs::read(&path) {
-                                d.dropped_files.paths.push(path);
-                                d.dropped_files.bytes.push(bytes);
-                            }
+                            // Add path for both files and directories, no automatic file reading
+                            d.dropped_files.paths.push(path);
+                            d.dropped_files.bytes.push(Vec::new());
                         }
                         // drop d since files_dropped_event is likely to need access to it
                         drop(d);

@@ -531,7 +531,8 @@ unsafe extern "system" fn win32_wndproc(
                         let path = path.assume_init();
                         PathBuf::from(OsString::from_wide(&path[0..path_len]))
                     };
-                    d.dropped_files.bytes.push(std::fs::read(&path).unwrap());
+                    // Add path for both files and directories, no automatic file reading
+                    d.dropped_files.bytes.push(Vec::new());
                     d.dropped_files.paths.push(path);
                 }
             }
