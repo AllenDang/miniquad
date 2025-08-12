@@ -109,7 +109,7 @@ impl GLError {
         const GL_OUT_OF_MEMORY: u32 = 0x0505;
         const GL_STACK_UNDERFLOW: u32 = 0x0504;
         const GL_STACK_OVERFLOW: u32 = 0x0503;
-        
+
         match error {
             GL_INVALID_ENUM => GLError::InvalidEnum,
             GL_INVALID_VALUE => GLError::InvalidValue,
@@ -141,10 +141,16 @@ impl Display for ResourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ResourceError::NotFound(id) => write!(f, "Resource with ID {} not found", id),
-            ResourceError::AlreadyDeleted(id) => write!(f, "Resource with ID {} already deleted", id),
+            ResourceError::AlreadyDeleted(id) => {
+                write!(f, "Resource with ID {} already deleted", id)
+            }
             ResourceError::InvalidState(msg) => write!(f, "Resource in invalid state: {}", msg),
             ResourceError::LimitExceeded { limit, requested } => {
-                write!(f, "Resource limit exceeded: requested {}, limit {}", requested, limit)
+                write!(
+                    f,
+                    "Resource limit exceeded: requested {}, limit {}",
+                    requested, limit
+                )
             }
         }
     }
@@ -156,8 +162,12 @@ impl Display for GraphicsError {
             GraphicsError::ContextLost => write!(f, "Graphics context lost"),
             GraphicsError::CreationFailed(msg) => write!(f, "Context creation failed: {}", msg),
             GraphicsError::Unsupported(msg) => write!(f, "Unsupported operation: {}", msg),
-            GraphicsError::InvalidTextureFormat(msg) => write!(f, "Invalid texture format: {}", msg),
-            GraphicsError::BufferCreationFailed(msg) => write!(f, "Buffer creation failed: {}", msg),
+            GraphicsError::InvalidTextureFormat(msg) => {
+                write!(f, "Invalid texture format: {}", msg)
+            }
+            GraphicsError::BufferCreationFailed(msg) => {
+                write!(f, "Buffer creation failed: {}", msg)
+            }
         }
     }
 }
@@ -165,8 +175,12 @@ impl Display for GraphicsError {
 impl Display for PlatformError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            PlatformError::DisplayInitFailed(msg) => write!(f, "Display initialization failed: {}", msg),
-            PlatformError::WindowCreationFailed(msg) => write!(f, "Window creation failed: {}", msg),
+            PlatformError::DisplayInitFailed(msg) => {
+                write!(f, "Display initialization failed: {}", msg)
+            }
+            PlatformError::WindowCreationFailed(msg) => {
+                write!(f, "Window creation failed: {}", msg)
+            }
             PlatformError::LibraryLoadFailed(msg) => write!(f, "Library loading failed: {}", msg),
             PlatformError::FeatureUnsupported(msg) => write!(f, "Feature not supported: {}", msg),
         }

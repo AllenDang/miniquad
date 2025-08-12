@@ -13,15 +13,15 @@ mod event;
 pub mod fs;
 pub mod graphics;
 pub mod native;
+use crate::error::{ResourceError, ResourceResult};
 use std::collections::HashMap;
 use std::ops::{Index, IndexMut};
-use crate::error::{ResourceError, ResourceResult};
 
 #[cfg(feature = "log-impl")]
 pub mod log;
 
-pub use event::*;
 pub use error::{MiniquadError, Result};
+pub use event::*;
 
 pub use graphics::*;
 
@@ -53,14 +53,15 @@ impl<T> ResourceManager<T> {
 
     /// Remove a resource by ID, returning an error if not found
     pub fn remove(&mut self, id: usize) -> ResourceResult<T> {
-        self.resources.remove(&id).ok_or(ResourceError::NotFound(id))
+        self.resources
+            .remove(&id)
+            .ok_or(ResourceError::NotFound(id))
     }
 
     /// Get a reference to a resource by ID
     pub fn get(&self, id: usize) -> ResourceResult<&T> {
         self.resources.get(&id).ok_or(ResourceError::NotFound(id))
     }
-
 }
 
 // Note: Index and IndexMut implementations are kept for backward compatibility
@@ -68,15 +69,23 @@ impl<T> ResourceManager<T> {
 impl<T> Index<usize> for ResourceManager<T> {
     type Output = T;
     fn index(&self, index: usize) -> &Self::Output {
-        self.resources.get(&index)
-            .unwrap_or_else(|| panic!("Resource with ID {} not found. Consider using get() for safe access.", index))
+        self.resources.get(&index).unwrap_or_else(|| {
+            panic!(
+                "Resource with ID {} not found. Consider using get() for safe access.",
+                index
+            )
+        })
     }
 }
 
 impl<T> IndexMut<usize> for ResourceManager<T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        self.resources.get_mut(&index)
-            .unwrap_or_else(|| panic!("Resource with ID {} not found. Consider using get_mut() for safe access.", index))
+        self.resources.get_mut(&index).unwrap_or_else(|| {
+            panic!(
+                "Resource with ID {} not found. Consider using get_mut() for safe access.",
+                index
+            )
+        })
     }
 }
 

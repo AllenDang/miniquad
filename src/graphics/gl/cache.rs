@@ -1,3 +1,4 @@
+use crate::graphics::profiling;
 use crate::graphics::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
@@ -43,12 +44,25 @@ pub struct GlCache {
     pub color_write: ColorMask,
     pub cull_face: CullFace,
     pub attributes: [Option<CachedAttribute>; MAX_VERTEX_ATTRIBUTES],
+
+    // Enhanced caching for performance optimization
+    pub current_program: GLuint,
+    pub viewport: (i32, i32, i32, i32),
+    pub scissor: Option<(i32, i32, i32, i32)>,
+
+    // Dirty flags to avoid redundant state changes
+    pub program_dirty: bool,
+    pub viewport_dirty: bool,
+    pub scissor_dirty: bool,
 }
 
 impl GlCache {
     pub fn bind_buffer(&mut self, target: GLenum, buffer: GLuint, index_type: Option<u32>) {
         if target == GL_ARRAY_BUFFER {
             if self.vertex_buffer != buffer {
+                let _ = profiling::get_profiler()
+                    .lock()
+                    .map(|mut p| p.record_buffer_bind(target, buffer));
                 self.vertex_buffer = buffer;
                 unsafe {
                     glBindBuffer(target, buffer);
@@ -56,6 +70,9 @@ impl GlCache {
             }
         } else {
             if self.index_buffer != buffer {
+                let _ = profiling::get_profiler()
+                    .lock()
+                    .map(|mut p| p.record_buffer_bind(target, buffer));
                 self.index_buffer = buffer;
                 unsafe {
                     glBindBuffer(target, buffer);
@@ -92,6 +109,9 @@ impl GlCache {
             if self.textures[slot_index].target != target
                 || self.textures[slot_index].texture != texture
             {
+                let _ = profiling::get_profiler()
+                    .lock()
+                    .map(|mut p| p.record_texture_bind(slot_index as u32, texture));
                 let target = if target == 0 { GL_TEXTURE_2D } else { target };
                 glBindTexture(target, texture);
                 self.textures[slot_index] = CachedTexture { target, texture };
@@ -136,6 +156,82 @@ impl GlCache {
                 unsafe { glDisableVertexAttribArray(attr_index as GLuint) };
             }
             *cached_attr = None;
+        }
+    }
+
+    /// Enhanced program caching with profiling
+    pub fn use_program(&mut self, program: GLuint) {
+        if self.current_program != program || self.program_dirty {
+            let _ = profiling::get_profiler()
+                .lock()
+                .map(|mut p| p.record_program_use(program));
+            self.current_program = program;
+            self.program_dirty = false;
+            unsafe {
+                glUseProgram(program);
+            }
+        }
+    }
+
+    /// Enhanced viewport caching
+    pub fn apply_viewport(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        let new_viewport = (x, y, w, h);
+        if self.viewport != new_viewport || self.viewport_dirty {
+            self.viewport = new_viewport;
+            self.viewport_dirty = false;
+            unsafe {
+                glViewport(x, y, w, h);
+            }
+        }
+    }
+
+    /// Enhanced scissor caching
+    pub fn apply_scissor(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        let new_scissor = Some((x, y, w, h));
+        if self.scissor != new_scissor || self.scissor_dirty {
+            self.scissor = new_scissor;
+            self.scissor_dirty = false;
+            unsafe {
+                glEnable(GL_SCISSOR_TEST);
+                glScissor(x, y, w, h);
+            }
+        }
+    }
+}
+
+impl Default for GlCache {
+    fn default() -> Self {
+        Self {
+            stored_index_buffer: 0,
+            stored_index_type: None,
+            stored_vertex_buffer: 0,
+            stored_target: 0,
+            stored_texture: 0,
+            index_buffer: 0,
+            index_type: None,
+            vertex_buffer: 0,
+            textures: [CachedTexture {
+                target: 0,
+                texture: 0,
+            }; MAX_SHADERSTAGE_IMAGES],
+            cur_pipeline: None,
+            cur_pass: None,
+            color_blend: None,
+            alpha_blend: None,
+            stencil: None,
+            color_write: (true, true, true, true),
+            cull_face: CullFace::Nothing,
+            attributes: [None; MAX_VERTEX_ATTRIBUTES],
+
+            // Enhanced caching state
+            current_program: 0,
+            viewport: (0, 0, 0, 0),
+            scissor: None,
+
+            // All dirty on init to force first setup
+            program_dirty: true,
+            viewport_dirty: true,
+            scissor_dirty: true,
         }
     }
 }

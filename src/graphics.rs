@@ -8,6 +8,7 @@ use std::{error::Error, fmt::Display};
 
 mod gl;
 mod gl_safety;
+pub mod profiling;
 
 pub use gl::raw_gl;
 pub use gl_safety::SafeGL;

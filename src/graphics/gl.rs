@@ -550,28 +550,7 @@ impl GlContext {
                 buffers: ResourceManager::default(),
                 textures: Textures(vec![]),
                 info,
-                cache: GlCache {
-                    stored_index_buffer: 0,
-                    stored_index_type: None,
-                    stored_vertex_buffer: 0,
-                    index_buffer: 0,
-                    index_type: None,
-                    vertex_buffer: 0,
-                    cur_pipeline: None,
-                    cur_pass: None,
-                    color_blend: None,
-                    alpha_blend: None,
-                    stencil: None,
-                    color_write: (true, true, true, true),
-                    cull_face: CullFace::Nothing,
-                    stored_texture: 0,
-                    stored_target: 0,
-                    textures: [CachedTexture {
-                        target: 0,
-                        texture: 0,
-                    }; MAX_SHADERSTAGE_IMAGES],
-                    attributes: [None; MAX_VERTEX_ATTRIBUTES],
-                },
+                cache: GlCache::default(),
             }
         }
     }
@@ -619,6 +598,7 @@ fn load_shader_internal(
             return Err(ShaderError::LinkError(error_message.to_string()));
         }
 
+        // Don't cache during shader creation - this is initialization
         glUseProgram(program);
 
         #[rustfmt::skip]
@@ -1161,7 +1141,8 @@ impl RenderingBackend for GlContext {
         RenderPass(self.passes.add(pass))
     }
     fn render_pass_color_attachments(&self, render_pass: RenderPass) -> &[TextureId] {
-        self.passes.get(render_pass.0)
+        self.passes
+            .get(render_pass.0)
             .map(|pass| pass.color_textures.as_slice())
             .unwrap_or(&[])
     }
@@ -1185,7 +1166,10 @@ impl RenderingBackend for GlContext {
                 self.delete_texture(depth_texture);
             }
         } else {
-            eprintln!("Warning: Attempting to delete invalid render pass ID {}", pass_id);
+            eprintln!(
+                "Warning: Attempting to delete invalid render pass ID {}",
+                pass_id
+            );
         }
     }
 
@@ -1228,7 +1212,10 @@ impl RenderingBackend for GlContext {
         let program = match self.shaders.get(shader.0) {
             Ok(shader) => shader.program,
             Err(_) => {
-                panic!("Invalid shader ID {} in new_pipeline. Shader may have been deleted.", shader.0);
+                panic!(
+                    "Invalid shader ID {} in new_pipeline. Shader may have been deleted.",
+                    shader.0
+                );
             }
         };
 
@@ -1315,20 +1302,25 @@ impl RenderingBackend for GlContext {
             let pipeline_data = match self.pipelines.get(pipeline.0) {
                 Ok(p) => p,
                 Err(_) => {
-                    eprintln!("Warning: Invalid pipeline ID {} in apply_pipeline", pipeline.0);
+                    eprintln!(
+                        "Warning: Invalid pipeline ID {} in apply_pipeline",
+                        pipeline.0
+                    );
                     return;
                 }
             };
             let shader = match self.shaders.get(pipeline_data.shader.0) {
                 Ok(s) => s,
                 Err(_) => {
-                    eprintln!("Warning: Invalid shader ID {} in pipeline", pipeline_data.shader.0);
+                    eprintln!(
+                        "Warning: Invalid shader ID {} in pipeline",
+                        pipeline_data.shader.0
+                    );
                     return;
                 }
             };
-            unsafe {
-                glUseProgram(shader.program);
-            }
+            // Use enhanced caching for program switching
+            self.cache.use_program(shader.program);
 
             unsafe {
                 glEnable(GL_SCISSOR_TEST);
@@ -1362,7 +1354,7 @@ impl RenderingBackend for GlContext {
             let alpha_blend = pipeline_data.params.alpha_blend;
             let stencil_test = pipeline_data.params.stencil_test;
             let color_write = pipeline_data.params.color_write;
-            
+
             // Now we can call mutable methods
             self.set_cull_face(cull_face);
             self.set_blend(color_blend, alpha_blend);
@@ -1390,7 +1382,7 @@ impl RenderingBackend for GlContext {
                 Some(element_size as u32)
             }
             BufferType::IndexBuffer => panic!(
-                "Unsupported index buffer element size: {}. Only 1, 2, and 4 bytes are supported", 
+                "Unsupported index buffer element size: {}. Only 1, 2, and 4 bytes are supported",
                 element_size
             ),
             BufferType::VertexBuffer => None,
@@ -1455,9 +1447,7 @@ impl RenderingBackend for GlContext {
 
     /// Size of buffer in bytes
     fn buffer_size(&mut self, buffer: BufferId) -> usize {
-        self.buffers.get(buffer.0)
-            .map(|b| b.size)
-            .unwrap_or(0)  // Return 0 for invalid buffer
+        self.buffers.get(buffer.0).map(|b| b.size).unwrap_or(0) // Return 0 for invalid buffer
     }
 
     /// Delete GPU buffer, leaving handle unmodified.
@@ -1479,17 +1469,13 @@ impl RenderingBackend for GlContext {
     /// Set a new viewport rectangle.
     /// Should be applied after begin_pass.
     fn apply_viewport(&mut self, x: i32, y: i32, w: i32, h: i32) {
-        unsafe {
-            glViewport(x, y, w, h);
-        }
+        self.cache.apply_viewport(x, y, w, h);
     }
 
     /// Set a new scissor rectangle.
     /// Should be applied after begin_pass.
     fn apply_scissor_rect(&mut self, x: i32, y: i32, w: i32, h: i32) {
-        unsafe {
-            glScissor(x, y, w, h);
-        }
+        self.cache.apply_scissor(x, y, w, h);
     }
 
     fn apply_bindings_from_slice(
@@ -1713,9 +1699,11 @@ impl RenderingBackend for GlContext {
         };
         unsafe {
             glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-            glViewport(0, 0, w, h);
-            glScissor(0, 0, w, h);
         }
+
+        // Use enhanced caching for viewport and scissor
+        self.cache.apply_viewport(0, 0, w, h);
+        self.cache.apply_scissor(0, 0, w, h);
         match action {
             PassAction::Nothing => {}
             PassAction::Clear {
@@ -1765,7 +1753,6 @@ impl RenderingBackend for GlContext {
         self.cache.clear_buffer_bindings();
         self.cache.clear_texture_bindings();
     }
-
 
     fn draw(&self, base_element: i32, num_elements: i32, num_instances: i32) {
         assert!(
