@@ -8,17 +8,20 @@
 )]
 
 pub mod conf;
+pub mod error;
 mod event;
 pub mod fs;
 pub mod graphics;
 pub mod native;
 use std::collections::HashMap;
 use std::ops::{Index, IndexMut};
+use crate::error::{ResourceError, ResourceResult};
 
 #[cfg(feature = "log-impl")]
 pub mod log;
 
 pub use event::*;
+pub use error::{MiniquadError, Result};
 
 pub use graphics::*;
 
@@ -48,22 +51,32 @@ impl<T> ResourceManager<T> {
         self.id - 1
     }
 
-    pub fn remove(&mut self, id: usize) -> T {
-        // Let it crash if the resource is not found
-        self.resources.remove(&id).unwrap()
+    /// Remove a resource by ID, returning an error if not found
+    pub fn remove(&mut self, id: usize) -> ResourceResult<T> {
+        self.resources.remove(&id).ok_or(ResourceError::NotFound(id))
     }
+
+    /// Get a reference to a resource by ID
+    pub fn get(&self, id: usize) -> ResourceResult<&T> {
+        self.resources.get(&id).ok_or(ResourceError::NotFound(id))
+    }
+
 }
 
+// Note: Index and IndexMut implementations are kept for backward compatibility
+// but will panic if resource doesn't exist. Use get() and get_mut() for safe access.
 impl<T> Index<usize> for ResourceManager<T> {
     type Output = T;
     fn index(&self, index: usize) -> &Self::Output {
-        &self.resources[&index]
+        self.resources.get(&index)
+            .unwrap_or_else(|| panic!("Resource with ID {} not found. Consider using get() for safe access.", index))
     }
 }
 
 impl<T> IndexMut<usize> for ResourceManager<T> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        self.resources.get_mut(&index).unwrap()
+        self.resources.get_mut(&index)
+            .unwrap_or_else(|| panic!("Resource with ID {} not found. Consider using get_mut() for safe access.", index))
     }
 }
 

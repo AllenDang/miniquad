@@ -479,7 +479,9 @@ pub struct ShaderImage {
 }
 
 fn get_uniform_location(program: GLuint, name: &str) -> Option<i32> {
-    let cname = CString::new(name).unwrap_or_else(|e| panic!("{}", e));
+    let cname = CString::new(name).unwrap_or_else(|e| {
+        panic!("Failed to create CString from uniform name '{}': {}. Uniform names cannot contain null bytes.", name, e)
+    });
     let location = unsafe { glGetUniformLocation(program, cname.as_ptr()) };
 
     if location == -1 {
@@ -925,13 +927,15 @@ impl RenderingBackend for GlContext {
     }
 
     fn delete_shader(&mut self, program: ShaderId) {
-        unsafe { glDeleteProgram(self.shaders[program.0].program) };
-        self.shaders.remove(program.0);
+        if let Ok(shader) = self.shaders.get(program.0) {
+            unsafe { glDeleteProgram(shader.program) };
+        }
+        let _ = self.shaders.remove(program.0);
         self.cache.cur_pipeline = None;
     }
 
     fn delete_pipeline(&mut self, pipeline: Pipeline) {
-        self.pipelines.remove(pipeline.0);
+        let _ = self.pipelines.remove(pipeline.0);
     }
 
     fn texture_set_wrap(&mut self, texture: TextureId, wrap_x: TextureWrap, wrap_y: TextureWrap) {
@@ -1157,26 +1161,31 @@ impl RenderingBackend for GlContext {
         RenderPass(self.passes.add(pass))
     }
     fn render_pass_color_attachments(&self, render_pass: RenderPass) -> &[TextureId] {
-        &self.passes[render_pass.0].color_textures
+        self.passes.get(render_pass.0)
+            .map(|pass| pass.color_textures.as_slice())
+            .unwrap_or(&[])
     }
     fn delete_render_pass(&mut self, render_pass: RenderPass) {
         let pass_id = render_pass.0;
 
-        let render_pass = self.passes.remove(pass_id);
+        // Get render pass data and then remove it
+        if let Ok(render_pass) = self.passes.remove(pass_id) {
+            unsafe { glDeleteFramebuffers(1, &render_pass.gl_fb as *const _) }
 
-        unsafe { glDeleteFramebuffers(1, &render_pass.gl_fb as *const _) }
-
-        for color_texture in &render_pass.color_textures {
-            self.delete_texture(*color_texture);
-        }
-        if let Some(resolves) = render_pass.resolves {
-            for (fb, texture) in resolves {
-                unsafe { glDeleteFramebuffers(1, &fb as *const _) }
-                self.delete_texture(texture);
+            for color_texture in &render_pass.color_textures {
+                self.delete_texture(*color_texture);
             }
-        }
-        if let Some(depth_texture) = render_pass.depth_texture {
-            self.delete_texture(depth_texture);
+            if let Some(resolves) = render_pass.resolves {
+                for (fb, texture) in resolves {
+                    unsafe { glDeleteFramebuffers(1, &fb as *const _) }
+                    self.delete_texture(texture);
+                }
+            }
+            if let Some(depth_texture) = render_pass.depth_texture {
+                self.delete_texture(depth_texture);
+            }
+        } else {
+            eprintln!("Warning: Attempting to delete invalid render pass ID {}", pass_id);
         }
     }
 
@@ -1216,7 +1225,12 @@ impl RenderingBackend for GlContext {
             assert!(cache.stride <= 255);
         }
 
-        let program = self.shaders[shader.0].program;
+        let program = match self.shaders.get(shader.0) {
+            Ok(shader) => shader.program,
+            Err(_) => {
+                panic!("Invalid shader ID {} in new_pipeline. Shader may have been deleted.", shader.0);
+            }
+        };
 
         let attributes_len = attributes
             .iter()
@@ -1240,7 +1254,9 @@ impl RenderingBackend for GlContext {
                 .unwrap_or_else(|| panic!());
             let layout = buffer_layout.get(*buffer_index).unwrap_or_else(|| panic!());
 
-            let cname = CString::new(*name).unwrap_or_else(|e| panic!("{}", e));
+            let cname = CString::new(*name).unwrap_or_else(|e| {
+                panic!("Failed to create CString from attribute name '{}': {}. Attribute names cannot contain null bytes.", name, e)
+            });
             let attr_loc = unsafe { glGetAttribLocation(program, cname.as_ptr() as *const _) };
             let attr_loc = if attr_loc == -1 { None } else { Some(attr_loc) };
             let divisor = if layout.step_func == VertexStep::PerVertex {
@@ -1296,8 +1312,20 @@ impl RenderingBackend for GlContext {
         self.cache.cur_pipeline = Some(*pipeline);
 
         {
-            let pipeline = &self.pipelines[pipeline.0];
-            let shader = &self.shaders[pipeline.shader.0];
+            let pipeline_data = match self.pipelines.get(pipeline.0) {
+                Ok(p) => p,
+                Err(_) => {
+                    eprintln!("Warning: Invalid pipeline ID {} in apply_pipeline", pipeline.0);
+                    return;
+                }
+            };
+            let shader = match self.shaders.get(pipeline_data.shader.0) {
+                Ok(s) => s,
+                Err(_) => {
+                    eprintln!("Warning: Invalid shader ID {} in pipeline", pipeline_data.shader.0);
+                    return;
+                }
+            };
             unsafe {
                 glUseProgram(shader.program);
             }
@@ -1306,10 +1334,10 @@ impl RenderingBackend for GlContext {
                 glEnable(GL_SCISSOR_TEST);
             }
 
-            if pipeline.params.depth_write {
+            if pipeline_data.params.depth_write {
                 unsafe {
                     glEnable(GL_DEPTH_TEST);
-                    glDepthFunc(pipeline.params.depth_test.into())
+                    glDepthFunc(pipeline_data.params.depth_test.into())
                 }
             } else {
                 unsafe {
@@ -1317,7 +1345,7 @@ impl RenderingBackend for GlContext {
                 }
             }
 
-            match pipeline.params.front_face_order {
+            match pipeline_data.params.front_face_order {
                 FrontFaceOrder::Clockwise => unsafe {
                     glFrontFace(GL_CW);
                 },
@@ -1327,14 +1355,20 @@ impl RenderingBackend for GlContext {
             }
         }
 
-        self.set_cull_face(self.pipelines[pipeline.0].params.cull_face);
-        self.set_blend(
-            self.pipelines[pipeline.0].params.color_blend,
-            self.pipelines[pipeline.0].params.alpha_blend,
-        );
-
-        self.set_stencil(self.pipelines[pipeline.0].params.stencil_test);
-        self.set_color_write(self.pipelines[pipeline.0].params.color_write);
+        // Get pipeline data again and copy the values to avoid borrowing issues
+        if let Ok(pipeline_data) = self.pipelines.get(pipeline.0) {
+            let cull_face = pipeline_data.params.cull_face;
+            let color_blend = pipeline_data.params.color_blend;
+            let alpha_blend = pipeline_data.params.alpha_blend;
+            let stencil_test = pipeline_data.params.stencil_test;
+            let color_write = pipeline_data.params.color_write;
+            
+            // Now we can call mutable methods
+            self.set_cull_face(cull_face);
+            self.set_blend(color_blend, alpha_blend);
+            self.set_stencil(stencil_test);
+            self.set_color_write(color_write);
+        }
     }
 
     fn new_buffer(
@@ -1355,7 +1389,10 @@ impl RenderingBackend for GlContext {
             {
                 Some(element_size as u32)
             }
-            BufferType::IndexBuffer => panic!("unsupported index buffer dimension"),
+            BufferType::IndexBuffer => panic!(
+                "Unsupported index buffer element size: {}. Only 1, 2, and 4 bytes are supported", 
+                element_size
+            ),
             BufferType::VertexBuffer => None,
         };
         let mut gl_buf: u32 = 0;
@@ -1386,10 +1423,18 @@ impl RenderingBackend for GlContext {
     fn buffer_update(&mut self, buffer: BufferId, data: BufferSource) {
         let data = match data {
             BufferSource::Slice(data) => data,
-            _ => panic!("buffer_update expects BufferSource::slice"),
+            BufferSource::Empty { .. } => panic!(
+                "buffer_update expects BufferSource::Slice, got BufferSource::Empty. Use new_buffer for initialization."
+            ),
         };
         debug_assert!(data.is_slice);
-        let buffer = &self.buffers[buffer.0];
+        let buffer = match self.buffers.get(buffer.0) {
+            Ok(b) => b,
+            Err(_) => {
+                eprintln!("Warning: Invalid buffer ID {} in buffer_update", buffer.0);
+                return;
+            }
+        };
 
         if matches!(buffer.buffer_type, BufferType::IndexBuffer) {
             assert!(buffer.index_type.is_some());
@@ -1410,7 +1455,9 @@ impl RenderingBackend for GlContext {
 
     /// Size of buffer in bytes
     fn buffer_size(&mut self, buffer: BufferId) -> usize {
-        self.buffers[buffer.0].size
+        self.buffers.get(buffer.0)
+            .map(|b| b.size)
+            .unwrap_or(0)  // Return 0 for invalid buffer
     }
 
     /// Delete GPU buffer, leaving handle unmodified.
@@ -1421,10 +1468,12 @@ impl RenderingBackend for GlContext {
     /// There is no protection against using deleted textures later. However its not an UB in OpenGl and thats why
     /// this function is not marked as unsafe
     fn delete_buffer(&mut self, buffer: BufferId) {
-        unsafe { glDeleteBuffers(1, &self.buffers[buffer.0].gl_buf as *const _) }
+        if let Ok(buffer_data) = self.buffers.get(buffer.0) {
+            unsafe { glDeleteBuffers(1, &buffer_data.gl_buf as *const _) }
+        }
         self.cache.clear_buffer_bindings();
         self.cache.clear_vertex_attributes();
-        self.buffers.remove(buffer.0);
+        let _ = self.buffers.remove(buffer.0);
     }
 
     /// Set a new viewport rectangle.
@@ -1716,6 +1765,7 @@ impl RenderingBackend for GlContext {
         self.cache.clear_buffer_bindings();
         self.cache.clear_texture_bindings();
     }
+
 
     fn draw(&self, base_element: i32, num_elements: i32, num_instances: i32) {
         assert!(

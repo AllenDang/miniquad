@@ -7,8 +7,10 @@ use std::{error::Error, fmt::Display};
 //pub use texture::{FilterMode, TextureAccess, TextureFormat, TextureParams, TextureWrap};
 
 mod gl;
+mod gl_safety;
 
 pub use gl::raw_gl;
+pub use gl_safety::SafeGL;
 
 #[cfg(target_vendor = "apple")]
 mod metal;
