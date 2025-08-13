@@ -7,6 +7,7 @@ use std::{error::Error, fmt::Display};
 //pub use texture::{FilterMode, TextureAccess, TextureFormat, TextureParams, TextureWrap};
 
 pub mod buffer_pool;
+pub mod command_buffer;
 mod gl;
 mod gl_safety;
 pub mod profiling;
@@ -541,6 +542,7 @@ pub enum CompareFunc {
 
 type ColorMask = (bool, bool, bool, bool);
 
+#[derive(Debug, Clone, PartialEq)]
 pub enum PassAction {
     Nothing,
     Clear {

@@ -5,6 +5,7 @@ use crate::{window, ResourceManager};
 mod cache;
 
 use super::buffer_pool::BufferPool;
+use super::command_buffer::CommandBuffer;
 use super::*;
 use cache::*;
 
@@ -525,6 +526,7 @@ pub struct GlContext {
     pub(crate) cache: GlCache,
     pub(crate) info: ContextInfo,
     buffer_pool: BufferPool,
+    command_buffer: CommandBuffer,
 }
 
 impl Default for GlContext {
@@ -560,6 +562,7 @@ impl GlContext {
                 info,
                 cache: GlCache::default(),
                 buffer_pool,
+                command_buffer: CommandBuffer::new(),
             }
         }
     }
@@ -574,8 +577,70 @@ impl GlContext {
         self.buffer_pool.get_stats().print_report();
     }
 
+    /// Get current command buffer statistics
+    pub fn command_buffer_stats(&self) -> super::command_buffer::BatchStats {
+        self.command_buffer.get_stats()
+    }
+
+    /// Print a detailed command buffer performance report
+    pub fn print_command_buffer_report(&self) {
+        self.command_buffer.get_stats().print_report();
+    }
+
+    /// Force flush all pending commands in the command buffer
+    pub fn flush_command_buffer(&mut self) {
+        // Need to work around borrow checker by extracting command buffer
+        let mut cmd_buffer = std::mem::take(&mut self.command_buffer);
+        let _ = cmd_buffer.execute(self);
+        self.command_buffer = cmd_buffer;
+    }
+
     pub fn features(&self) -> &Features {
         &self.info.features
+    }
+
+    /// Internal draw method that uses command buffer for batching
+    pub fn draw_batched(&mut self, base_element: i32, num_elements: i32, num_instances: i32) {
+        assert!(
+            self.cache.cur_pipeline.is_some(),
+            "Drawing without any binded pipeline"
+        );
+
+        if !self.info.features.instancing && num_instances != 1 {
+            eprintln!("Instanced rendering is not supported by the GPU");
+            eprintln!("Ignoring this draw call");
+            return;
+        }
+
+        // Get current pipeline and create command bindings
+        let pipeline = self.cache.cur_pipeline.unwrap();
+        let pip = &self.pipelines[pipeline.0];
+        let primitive_type = pip.params.primitive_type;
+        let index_type = self.cache.index_type.expect("Unset index buffer type");
+
+        // Create bindings from current cache state
+        let current_bindings = super::command_buffer::CommandBindings {
+            vertex_buffers: vec![],    // Would need to track current vertex buffers
+            index_buffer: BufferId(0), // Would need to track current index buffer
+            images: vec![],            // Would need to track current textures
+        };
+
+        // Add draw command to the buffer
+        self.command_buffer.draw_elements(
+            pipeline,
+            &Bindings {
+                vertex_buffers: current_bindings.vertex_buffers.clone(),
+                index_buffer: current_bindings.index_buffer,
+                images: current_bindings.images.clone(),
+            },
+            super::command_buffer::DrawElementsParams {
+                base_element,
+                num_elements,
+                num_instances,
+                primitive_type,
+                index_type,
+            },
+        );
     }
 }
 
@@ -1802,6 +1867,11 @@ impl RenderingBackend for GlContext {
     }
 
     fn commit_frame(&mut self) {
+        // Execute any pending commands in the command buffer
+        let mut cmd_buffer = std::mem::take(&mut self.command_buffer);
+        let _ = cmd_buffer.execute(self);
+        self.command_buffer = cmd_buffer;
+
         self.cache.clear_buffer_bindings();
         self.cache.clear_texture_bindings();
 
