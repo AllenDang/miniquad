@@ -4,6 +4,7 @@ use crate::{window, ResourceManager};
 
 mod cache;
 
+use super::buffer_pool::BufferPool;
 use super::*;
 use cache::*;
 
@@ -30,6 +31,8 @@ struct Buffer {
     // used only as a type argument for glDrawElements and can be
     // 1, 2 or 4
     index_type: Option<u32>,
+    // Track if this buffer is from the pool for proper cleanup
+    from_pool: bool,
 }
 
 #[derive(Debug)]
@@ -521,6 +524,7 @@ pub struct GlContext {
     default_framebuffer: GLuint,
     pub(crate) cache: GlCache,
     pub(crate) info: ContextInfo,
+    buffer_pool: BufferPool,
 }
 
 impl Default for GlContext {
@@ -542,6 +546,10 @@ impl GlContext {
             glGenVertexArrays(1, &mut vao as *mut _);
             glBindVertexArray(vao);
             let info = gl_info();
+            let mut buffer_pool = BufferPool::new();
+            // Warm up the pool with common buffer sizes for better performance
+            let _ = buffer_pool.warm_up();
+
             GlContext {
                 default_framebuffer,
                 shaders: ResourceManager::default(),
@@ -551,8 +559,19 @@ impl GlContext {
                 textures: Textures(vec![]),
                 info,
                 cache: GlCache::default(),
+                buffer_pool,
             }
         }
+    }
+
+    /// Get current buffer pool statistics
+    pub fn buffer_pool_stats(&self) -> super::buffer_pool::BufferPoolStats {
+        self.buffer_pool.get_stats()
+    }
+
+    /// Print a detailed buffer pool performance report
+    pub fn print_buffer_pool_report(&self) {
+        self.buffer_pool.get_stats().print_report();
     }
 
     pub fn features(&self) -> &Features {
@@ -1370,7 +1389,6 @@ impl RenderingBackend for GlContext {
         data: BufferSource,
     ) -> BufferId {
         let gl_target = gl_buffer_target(&type_);
-        let gl_usage = gl_usage(&usage);
         let (size, element_size) = match &data {
             BufferSource::Slice(data) => (data.size, data.element_size),
             BufferSource::Empty { size, element_size } => (*size, *element_size),
@@ -1387,18 +1405,45 @@ impl RenderingBackend for GlContext {
             ),
             BufferType::VertexBuffer => None,
         };
-        let mut gl_buf: u32 = 0;
 
+        // Try to acquire buffer from pool first
+        let (gl_buf, from_pool) = match self.buffer_pool.acquire_buffer(type_, usage, size) {
+            Ok(pooled_buf) => (pooled_buf, true),
+            Err(_) => {
+                // Pool failed, fall back to direct allocation
+                let mut gl_buf: u32 = 0;
+                unsafe {
+                    glGenBuffers(1, &mut gl_buf as *mut _);
+                    if gl_buf == 0 {
+                        panic!("Failed to generate GL buffer");
+                    }
+                }
+                (gl_buf, false)
+            }
+        };
+
+        // Upload data to the buffer
         unsafe {
-            glGenBuffers(1, &mut gl_buf as *mut _);
             self.cache.store_buffer_binding(gl_target);
             self.cache.bind_buffer(gl_target, gl_buf, index_type);
 
-            glBufferData(gl_target, size as _, std::ptr::null() as *const _, gl_usage);
-            if let BufferSource::Slice(data) = data {
-                debug_assert!(data.is_slice);
-                glBufferSubData(gl_target, 0, size as _, data.ptr as _);
+            if from_pool {
+                // For pooled buffers, we only need to update the data, not reallocate
+                if let BufferSource::Slice(data) = data {
+                    debug_assert!(data.is_slice);
+                    glBufferSubData(gl_target, 0, size as _, data.ptr as _);
+                }
+                // For empty buffers from pool, the buffer is already allocated with correct size
+            } else {
+                // For non-pooled buffers, we need to allocate and upload
+                let gl_usage = gl_usage(&usage);
+                glBufferData(gl_target, size as _, std::ptr::null() as *const _, gl_usage);
+                if let BufferSource::Slice(data) = data {
+                    debug_assert!(data.is_slice);
+                    glBufferSubData(gl_target, 0, size as _, data.ptr as _);
+                }
             }
+
             self.cache.restore_buffer_binding(gl_target);
         }
 
@@ -1407,6 +1452,7 @@ impl RenderingBackend for GlContext {
             buffer_type: type_,
             size,
             index_type,
+            from_pool,
         };
 
         BufferId(self.buffers.add(buffer))
@@ -1459,7 +1505,13 @@ impl RenderingBackend for GlContext {
     /// this function is not marked as unsafe
     fn delete_buffer(&mut self, buffer: BufferId) {
         if let Ok(buffer_data) = self.buffers.get(buffer.0) {
-            unsafe { glDeleteBuffers(1, &buffer_data.gl_buf as *const _) }
+            if buffer_data.from_pool {
+                // Return pooled buffer back to the pool for reuse
+                let _ = self.buffer_pool.release_buffer(buffer_data.gl_buf);
+            } else {
+                // Delete non-pooled buffer immediately
+                unsafe { glDeleteBuffers(1, &buffer_data.gl_buf as *const _) }
+            }
         }
         self.cache.clear_buffer_bindings();
         self.cache.clear_vertex_attributes();
@@ -1752,6 +1804,16 @@ impl RenderingBackend for GlContext {
     fn commit_frame(&mut self) {
         self.cache.clear_buffer_bindings();
         self.cache.clear_texture_bindings();
+
+        // Periodically clean up old unused buffers from the pool
+        // This happens approximately every 60 frames at 60fps = once per second
+        static mut FRAME_COUNT: u32 = 0;
+        unsafe {
+            FRAME_COUNT += 1;
+            if FRAME_COUNT % 60 == 0 {
+                self.buffer_pool.cleanup_old_buffers();
+            }
+        }
     }
 
     fn draw(&self, base_element: i32, num_elements: i32, num_instances: i32) {

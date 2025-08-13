@@ -6,6 +6,7 @@ use std::{error::Error, fmt::Display};
 
 //pub use texture::{FilterMode, TextureAccess, TextureFormat, TextureParams, TextureWrap};
 
+pub mod buffer_pool;
 mod gl;
 mod gl_safety;
 pub mod profiling;
@@ -779,13 +780,13 @@ pub struct Bindings {
     pub images: Vec<TextureId>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BufferType {
     VertexBuffer,
     IndexBuffer,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BufferUsage {
     Immutable,
     Dynamic,
